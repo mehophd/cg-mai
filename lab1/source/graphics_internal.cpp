@@ -478,7 +478,6 @@ bool initialize(GLFWwindow* const window) {
 	vk_swapchain_image_views = vkb_swapchain.get_image_views().value();
 	vk_swapchain_current_image = UINT32_MAX;
 
-	// ИСПРАВЛЕНИЕ 3: Инициализируем переменные отслеживания изменения размера
 	vk_swapchain_resize_width = initial_width;
 	vk_swapchain_resize_height = initial_height;
 	vk_swapchain_resize_require = false;

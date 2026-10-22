@@ -2,32 +2,31 @@
 
 #include "application.hpp"
 
+#include <imgui.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <chrono>
+#include <array>
+#include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <cstdio>
 #include <cstring>
-#include <iostream>
+#include <cstddef>
 #include <vector>
 
 namespace application {
 namespace {
-
-struct Vertex {
-    glm::vec3 position;
-    glm::vec3 color;
-};
-
-struct Push {
-    glm::mat4 mvp;
-};
-
+struct Vertex { glm::vec3 position; glm::vec3 color; };
+struct Push { glm::mat4 mvp; };
 VkPipelineLayout layout = VK_NULL_HANDLE;
 VkPipeline pipeline = VK_NULL_HANDLE;
 VkBuffer vertex_buffer = VK_NULL_HANDLE;
 VmaAllocation vertex_allocation = VK_NULL_HANDLE;
 uint32_t vertex_count = 0;
+float rotation[3] = {0.45f, 0.6f, 0.0f};
+float scale = 1.0f;
+int projection = 0;
+bool auto_rotate = true;
 
 std::vector<Vertex> makeCone() {
     std::vector<Vertex> out;
@@ -38,6 +37,7 @@ std::vector<Vertex> makeCone() {
 
     glm::vec3 apex(0.0f, half_height, 0.0f);
     glm::vec3 base_center(0.0f, -half_height, 0.0f);
+
     glm::vec3 color_apex(1.0f, 0.75f, 0.2f);
     glm::vec3 color_base(0.2f, 0.5f, 0.9f);
 
@@ -47,6 +47,7 @@ std::vector<Vertex> makeCone() {
         base_vertices.emplace_back(radius * std::cos(angle), -half_height, radius * std::sin(angle));
     }
 
+    // Боковая поверхность
     for (int i = 0; i < segments; ++i) {
         int next_i = (i + 1) % segments;
         glm::vec3 c_side = glm::mix(color_base, color_apex, 0.5f);
@@ -55,6 +56,7 @@ std::vector<Vertex> makeCone() {
         out.push_back({base_vertices[next_i], c_side});
     }
 
+    // Основание
     for (int i = 0; i < segments; ++i) {
         int next_i = (i + 1) % segments;
         out.push_back({base_center, color_base});
@@ -72,19 +74,17 @@ VkShaderModule loadShader(const char* path) {
     long size = std::ftell(f);
     std::rewind(f);
     std::vector<uint32_t> code(size > 0 ? size / 4 : 0);
-    bool ok = size > 0 && std::fread(code.data(), 1, static_cast<size_t>(size), f) == static_cast<size_t>(size);
+    bool ok = size > 0 && std::fread(code.data(), 1, size, f) == size;
     std::fclose(f);
     if (!ok) return VK_NULL_HANDLE;
-
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    ci.codeSize = static_cast<size_t>(size);
+    ci.codeSize = size;
     ci.pCode = code.data();
     VkShaderModule m = VK_NULL_HANDLE;
     if (vkCreateShaderModule(graphics::internal::context.device, &ci, nullptr, &m) != VK_SUCCESS)
         return VK_NULL_HANDLE;
     return m;
 }
-
 } // namespace
 
 bool initialize() {
@@ -116,7 +116,7 @@ bool initialize() {
     VkShaderModule vs = loadShader("shaders/cone.vert.spv");
     VkShaderModule fs = loadShader("shaders/cone.frag.spv");
     if (!vs || !fs) {
-        std::cerr << "Shader files missing.\n";
+        std::cerr << "Shader files missing: run the CMake build from project root.\n";
         return false;
     }
 
@@ -200,7 +200,26 @@ void shutdown() {
 }
 
 void update(double time) {
-    (void)time;
+    ImGui::Begin("Конус | Вариант 10");
+    ImGui::Text("Программная генерация: 48 сегментов основания");
+    const char* modes[] = {"Перспективная", "Ортографическая"};
+    ImGui::Combo("Проекция", &projection, modes, 2);
+    ImGui::SliderFloat3("Поворот", rotation, -3.14f, 3.14f, "%.2f рад");
+    ImGui::SliderFloat("Масштаб", &scale, 0.35f, 1.6f);
+    ImGui::Checkbox("Вращать автоматически", &auto_rotate);
+    if (ImGui::Button("Сбросить")) {
+        rotation[0] = 0.45f;
+        rotation[1] = 0.6f;
+        rotation[2] = 0.0f;
+        scale = 1.0f;
+    }
+    ImGui::Separator();
+    ImGui::Text("Vulkan + GLFW + ImGui");
+    ImGui::End();
+
+    if (auto_rotate) {
+        rotation[1] = float(time) * 0.45f;
+    }
 }
 
 void render(const graphics::internal::FrameData& fd) {
@@ -229,18 +248,21 @@ void render(const graphics::internal::FrameData& fd) {
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    static auto start_time = std::chrono::high_resolution_clock::now();
-    auto now = std::chrono::high_resolution_clock::now();
-    double time = std::chrono::duration<double>(now - start_time).count();
-    
-    float rot_y = float(time) * 0.5f;
-    float rot_x = 0.45f;
-
-    glm::mat4 model = glm::rotate(glm::mat4(1.0f), rot_x, {1, 0, 0});
-    model = glm::rotate(model, rot_y, {0, 1, 0});
+    glm::mat4 model = glm::rotate(glm::mat4(1.0f), rotation[0], {1, 0, 0});
+    model = glm::rotate(model, rotation[1], {0, 1, 0});
+    model = glm::rotate(model, rotation[2], {0, 0, 1});
+    model = glm::scale(model, glm::vec3(scale));
 
     float aspect = float(c.swapchain_extent.width) / std::max(1u, c.swapchain_extent.height);
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 20.0f);
+
+    glm::mat4 proj;
+    if (projection == 0) {
+        proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 20.0f);
+    } else {
+        proj = glm::ortho(-1.8f * aspect, 1.8f * aspect, -1.8f, 1.8f, 0.1f, 20.0f);
+    }
+
+    // Инверсия оси Y для Vulkan (clip space Y направлен вниз)
     proj[1][1] *= -1.0f;
 
     glm::mat4 view = glm::lookAt(glm::vec3(0, 0, 3.4f), glm::vec3(0), glm::vec3(0, 1, 0));
@@ -255,5 +277,4 @@ void render(const graphics::internal::FrameData& fd) {
     vkCmdEndRenderPass(cmd);
     vkEndCommandBuffer(cmd);
 }
-
 } // namespace application
